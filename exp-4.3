@@ -1,0 +1,91 @@
+const express = require('express');
+const bodyParser = express.json();
+const app = express();
+app.use(bodyParser);
+const PORT = 3000;
+const LOCK_TTL_MS = 60000;
+
+const seats = new Map();
+for (let i = 1; i <= 10; i++) {
+  const id = `A${i}`;
+  seats.set(id, { id, status: 'available', lockedBy: null, lockId: null, lockedUntil: null, bookedBy: null });
+}
+
+const seatQueues = new Map();
+function withSeatQueue(seatId, fn) {
+  const prev = seatQueues.get(seatId) || Promise.resolve();
+  let resolveNext;
+  const next = prev.then(() => new Promise((res) => { resolveNext = res; }));
+  seatQueues.set(seatId, next);
+  return prev.then(async () => {
+    try {
+      return await fn();
+    } finally {
+      resolveNext();
+      if (seatQueues.get(seatId) === next) seatQueues.delete(seatId);
+    }
+  });
+}
+
+function genLockId() {
+  return Math.random().toString(36).substring(2, 10);
+}
+
+app.get('/seats', (req, res) => {
+  res.json([...seats.values()]);
+});
+
+app.post('/lock', async (req, res) => {
+  const { seatId, userId } = req.body;
+  if (!seatId || !userId) return res.status(400).json({ message: 'seatId and userId required' });
+  const seat = seats.get(seatId);
+  if (!seat) return res.status(404).json({ message: 'Seat not found' });
+  await withSeatQueue(seatId, async () => {
+    const now = Date.now();
+    if (seat.status === 'booked') return res.status(400).json({ message: 'Seat already booked' });
+    if (seat.status === 'locked' && seat.lockedUntil > now) return res.status(400).json({ message: 'Seat already locked' });
+    const lockId = genLockId();
+    seat.status = 'locked';
+    seat.lockId = lockId;
+    seat.lockedBy = userId;
+    seat.lockedUntil = now + LOCK_TTL_MS;
+    res.json({ message: 'Seat locked', seatId, lockId, expiresIn: LOCK_TTL_MS / 1000 });
+    setTimeout(() => {
+      if (seat.status === 'locked' && seat.lockId === lockId && seat.lockedUntil <= Date.now()) {
+        seat.status = 'available';
+        seat.lockId = seat.lockedBy = seat.lockedUntil = null;
+      }
+    }, LOCK_TTL_MS + 1000);
+  });
+});
+
+app.post('/confirm', async (req, res) => {
+  const { seatId, userId } = req.body;
+  if (!seatId || !userId) return res.status(400).json({ message: 'seatId and userId required' });
+  const seat = seats.get(seatId);
+  if (!seat) return res.status(404).json({ message: 'Seat not found' });
+  await withSeatQueue(seatId, async () => {
+    const now = Date.now();
+    if (seat.status !== 'locked' || seat.lockedBy !== userId || seat.lockedUntil < now)
+      return res.status(400).json({ message: 'Seat not locked by this user or lock expired' });
+    seat.status = 'booked';
+    seat.bookedBy = userId;
+    seat.lockedBy = seat.lockId = seat.lockedUntil = null;
+    res.json({ message: 'Seat booked successfully', seatId });
+  });
+});
+
+app.post('/release', async (req, res) => {
+  const { seatId, userId } = req.body;
+  const seat = seats.get(seatId);
+  if (!seat) return res.status(404).json({ message: 'Seat not found' });
+  await withSeatQueue(seatId, async () => {
+    if (seat.status !== 'locked' || seat.lockedBy !== userId)
+      return res.status(400).json({ message: 'Seat not locked by this user' });
+    seat.status = 'available';
+    seat.lockedBy = seat.lockId = seat.lockedUntil = null;
+    res.json({ message: 'Seat released', seatId });
+  });
+});
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
