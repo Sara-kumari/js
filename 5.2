@@ -1,0 +1,182 @@
+// ==========================
+// STUDENT MANAGEMENT SYSTEM
+// Using Node.js, Express, MongoDB (Mongoose)
+// Follows MVC Architecture (merged in one file for simplicity)
+// ==========================
+
+const express = require("express");
+const mongoose = require("mongoose");
+const bodyParser = require("body-parser");
+const path = require("path");
+
+const app = express();
+
+// ==========================
+// MIDDLEWARE
+// ==========================
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Set view engine (EJS)
+app.set("view engine", "ejs");
+
+// ==========================
+// DATABASE CONNECTION
+// ==========================
+mongoose.connect("mongodb://127.0.0.1:27017/studentDB", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log(" MongoDB Connected"))
+.catch((err) => console.error(" Database connection failed:", err));
+
+// ==========================
+// MODEL (M in MVC)
+// ==========================
+const studentSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  rollNo: { type: Number, required: true, unique: true },
+  class: { type: String, required: true },
+  section: { type: String, required: true },
+  marks: { type: Number, default: 0 },
+}, { timestamps: true });
+
+const Student = mongoose.model("Student", studentSchema);
+
+// ==========================
+// CONTROLLER (C in MVC)
+// ==========================
+
+// Create new student
+async function createStudent(req, res) {
+  try {
+    const student = new Student(req.body);
+    const saved = await student.save();
+    res.status(201).json(saved);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// Get all students
+async function getStudents(req, res) {
+  try {
+    const students = await Student.find();
+    res.render("index", { students });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// Get student by ID
+async function getStudentById(req, res) {
+  try {
+    const student = await Student.findById(req.params.id);
+    if (!student) return res.status(404).json({ message: "Student not found" });
+    res.json(student);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// Update student
+async function updateStudent(req, res) {
+  try {
+    const updated = await Student.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+    if (!updated) return res.status(404).json({ message: "Student not found" });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// Delete student
+async function deleteStudent(req, res) {
+  try {
+    const deleted = await Student.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: "Student not found" });
+    res.json({ message: "Student deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// ==========================
+// ROUTES (V + routing in MVC)
+// ==========================
+
+// EJS View route (homepage)
+app.get("/", (req, res) => {
+  res.redirect("/students");
+});
+
+// CRUD routes
+app.post("/students", createStudent);
+app.get("/students", getStudents);
+app.get("/students/:id", getStudentById);
+app.put("/students/:id", updateStudent);
+app.delete("/students/:id", deleteStudent);
+
+// ==========================
+// EJS TEMPLATE (inline view)
+// ==========================
+app.engine("ejs", (path, data, callback) => {
+  const html = `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>Student Management System</title>
+    <style>
+      body { font-family: Arial; background: #f5f5f5; padding: 20px; }
+      table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
+      th, td { border: 1px solid #ddd; padding: 8px; }
+      th { background: #007bff; color: white; }
+      h1 { color: #333; }
+    </style>
+  </head>
+  <body>
+    <h1>All Students</h1>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Roll No</th>
+          <th>Class</th>
+          <th>Section</th>
+          <th>Marks</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          data.students && data.students.length
+            ? data.students
+                .map(
+                  (s) =>
+                    `<tr>
+                      <td>${s.name}</td>
+                      <td>${s.rollNo}</td>
+                      <td>${s.class}</td>
+                      <td>${s.section}</td>
+                      <td>${s.marks}</td>
+                    </tr>`
+                )
+                .join("")
+            : `<tr><td colspan="5">No students found</td></tr>`
+        }
+      </tbody>
+    </table>
+  </body>
+  </html>`;
+  return callback(null, html);
+});
+
+// ==========================
+// SERVER START
+// ==========================
+const PORT = 3000;
+app.listen(PORT, () => {
+  console.log(` Server running at http://localhost:${PORT}`);
+});
