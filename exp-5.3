@@ -1,0 +1,292 @@
+/*
+E‑commerce catalog (Node.js + Mongoose)
+Single-file reference showing:
+- Mongoose nested document schemas (Category, Product, Variant, Review)
+- Indexes, virtuals, and aggregation examples
+- Express routes for CRUD and filtering
+- Seed data and example queries
+
+To use:
+1. npm init -y
+2. npm i express mongoose body-parser
+3. node ecommerce-catalog-nodejs.js
+
+This file is a single-file example for learning and quick prototyping only.
+*/
+
+const express = require('express');
+const mongoose = require('mongoose');
+const bodyParser = require('body-parser');
+
+const app = express();
+app.use(bodyParser.json());
+
+const DB = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/ecom_catalog';
+
+mongoose.connect(DB, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB connection error', err));
+
+// ---------------------------
+// Schemas
+// ---------------------------
+
+const ImageSchema = new mongoose.Schema({
+  url: { type: String, required: true },
+  alt: String,
+  order: { type: Number, default: 0 }
+}, { _id: false });
+
+const PriceSchema = new mongoose.Schema({
+  currency: { type: String, default: 'INR' },
+  amount: { type: Number, required: true },
+  saleAmount: Number,
+}, { _id: false });
+
+const InventorySchema = new mongoose.Schema({
+  sku: { type: String, required: true },
+  quantity: { type: Number, default: 0 },
+  warehouseLocation: String,
+  lowStockThreshold: { type: Number, default: 5 }
+}, { _id: false });
+
+const VariantSchema = new mongoose.Schema({
+  title: String, // e.g. "Red / XL"
+  attributes: { type: Map, of: String }, // e.g. { color: 'red', size: 'XL' }
+  price: PriceSchema,
+  inventory: InventorySchema,
+  images: [ImageSchema]
+}, { _id: true }); // variants get their own _id
+
+const ReviewSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  name: String,
+  rating: { type: Number, min: 1, max: 5 },
+  title: String,
+  body: String,
+  createdAt: { type: Date, default: Date.now }
+}, { _id: true });
+
+const CategorySchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  slug: { type: String, required: true, index: true },
+  parent: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', default: null },
+  ancestors: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }]
+});
+
+const ProductSchema = new mongoose.Schema({
+  title: { type: String, required: true, index: true },
+  slug: { type: String, required: true, unique: true, index: true },
+  description: String,
+  shortDescription: String,
+  brand: String,
+  categories: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }],
+  tags: [String],
+  images: [ImageSchema],
+  attributes: { type: Map, of: String }, // global attributes like material
+  variants: [VariantSchema],
+  price: PriceSchema, // default / base price
+  inventory: InventorySchema, // aggregate or default inventory
+  ratings: {
+    avg: { type: Number, default: 0 },
+    count: { type: Number, default: 0 }
+  },
+  reviews: [ReviewSchema],
+  seo: {
+    metaTitle: String,
+    metaDescription: String
+  },
+  isPublished: { type: Boolean, default: true },
+  publishedAt: Date
+}, { timestamps: true });
+
+// ---------------------------
+// Indexes & Virtuals
+// ---------------------------
+
+// Text index for search
+ProductSchema.index({ title: 'text', description: 'text', 'variants.attributes': 'text', tags: 'text' });
+
+// Compound index for category + price queries
+ProductSchema.index({ 'categories': 1, 'price.amount': 1 });
+
+// Virtual: total inventory across variants (not stored)
+ProductSchema.virtual('totalInventory').get(function () {
+  if (!this.variants || this.variants.length === 0) return this.inventory ? this.inventory.quantity : 0;
+  return this.variants.reduce((sum, v) => sum + (v.inventory ? v.inventory.quantity : 0), 0);
+});
+
+// Pre-save hook to compute ratings average when reviews change
+ProductSchema.methods.recalculateRatings = function () {
+  if (!this.reviews || this.reviews.length === 0) {
+    this.ratings = { avg: 0, count: 0 };
+    return;
+  }
+  const count = this.reviews.length;
+  const sum = this.reviews.reduce((s, r) => s + (r.rating || 0), 0);
+  this.ratings.avg = +(sum / count).toFixed(2);
+  this.ratings.count = count;
+};
+
+const Category = mongoose.model('Category', CategorySchema);
+const Product = mongoose.model('Product', ProductSchema);
+
+// ---------------------------
+// Express routes (basic)
+// ---------------------------
+
+// Create a product (body: product JSON)
+app.post('/api/products', async (req, res) => {
+  try {
+    const p = new Product(req.body);
+    // if reviews provided, compute ratings
+    p.recalculateRatings();
+    await p.save();
+    res.status(201).json(p);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Get a product by slug
+app.get('/api/products/:slug', async (req, res) => {
+  try {
+    const p = await Product.findOne({ slug: req.params.slug }).populate('categories');
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    res.json(p);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update product partially
+app.patch('/api/products/:id', async (req, res) => {
+  try {
+    const p = await Product.findById(req.params.id);
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    Object.assign(p, req.body);
+    if (req.body.reviews) p.recalculateRatings();
+    await p.save();
+    res.json(p);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Delete product
+app.delete('/api/products/:id', async (req, res) => {
+  try {
+    await Product.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Search & filter: ?q=&category=&min=&max=&sort=price_asc&page=1&limit=12
+app.get('/api/products', async (req, res) => {
+  try {
+    const { q, category, min, max, sort, page = 1, limit = 12, tag } = req.query;
+    const filter = { isPublished: true };
+    if (category) filter.categories = category;
+    if (tag) filter.tags = tag;
+    if (min || max) filter['price.amount'] = {};
+    if (min) filter['price.amount'].$gte = +min;
+    if (max) filter['price.amount'].$lte = +max;
+
+    let mongoQuery = Product.find(filter).populate('categories');
+
+    if (q) {
+      mongoQuery = mongoQuery.find({ $text: { $search: q } }, { score: { $meta: 'textScore' } }).sort({ score: { $meta: 'textScore' } });
+    }
+
+    if (sort === 'price_asc') mongoQuery = mongoQuery.sort({ 'price.amount': 1 });
+    if (sort === 'price_desc') mongoQuery = mongoQuery.sort({ 'price.amount': -1 });
+
+    const skip = (page - 1) * limit;
+    const docs = await mongoQuery.skip(skip).limit(+limit).exec();
+    res.json(docs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Aggregation example: top-rated products
+app.get('/api/analytics/top-rated', async (req, res) => {
+  try {
+    const top = await Product.aggregate([
+      { $match: { 'ratings.count': { $gt: 0 } } },
+      { $project: { title: 1, slug: 1, ratings: 1, avg: '$ratings.avg' } },
+      { $sort: { 'ratings.avg': -1 } },
+      { $limit: 10 }
+    ]);
+    res.json(top);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Example: add review to product (embedded)
+app.post('/api/products/:id/reviews', async (req, res) => {
+  try {
+    const p = await Product.findById(req.params.id);
+    if (!p) return res.status(404).json({ error: 'Product not found' });
+    p.reviews.push(req.body);
+    p.recalculateRatings();
+    await p.save();
+    res.status(201).json(p);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------
+// Seed helper
+// ---------------------------
+async function seedSampleData() {
+  const c1 = await Category.findOneAndUpdate({ slug: 'clothing' }, { name: 'Clothing', slug: 'clothing' }, { upsert: true, new: true });
+  const c2 = await Category.findOneAndUpdate({ slug: 'men' }, { name: 'Men', slug: 'men', parent: c1._id, ancestors: [c1._id] }, { upsert: true, new: true });
+
+  const pCount = await Product.countDocuments();
+  if (pCount > 0) return;
+
+  const product = new Product({
+    title: 'Classic Tee',
+    slug: 'classic-tee',
+    description: 'Soft cotton t-shirt, regular fit.',
+    brand: 'Everyday Co',
+    categories: [c2._id],
+    tags: ['tshirt', 'cotton', 'casual'],
+    images: [{ url: 'https://example.com/img/tee-1.jpg', alt: 'Classic tee front' }],
+    attributes: { material: 'cotton' },
+    price: { currency: 'INR', amount: 599 },
+    variants: [
+      {
+        title: 'White / M',
+        attributes: { color: 'white', size: 'M' },
+        price: { currency: 'INR', amount: 599 },
+        inventory: { sku: 'TEE-WHT-M', quantity: 30 }
+      },
+      {
+        title: 'Black / L',
+        attributes: { color: 'black', size: 'L' },
+        price: { currency: 'INR', amount: 599 },
+        inventory: { sku: 'TEE-BLK-L', quantity: 0 }
+      }
+    ],
+    inventory: { sku: 'TEE-DEFAULT', quantity: 30 }
+  });
+  product.recalculateRatings();
+  await product.save();
+  console.log('Seeded sample product');
+}
+
+// Run seed once mongoose is ready
+mongoose.connection.once('open', () => seedSampleData());
+
+// ---------------------------
+// Start server
+// ---------------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+
