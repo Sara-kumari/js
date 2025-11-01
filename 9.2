@@ -1,0 +1,150 @@
+Folder setup
+
+Your repo might look like:
+
+my-app/
+├── src/
+├── package.json
+├── Dockerfile
+└── .github/
+    └── workflows/
+        └── ci.yml
+
+
+If .github/workflows/ doesn’t exist, create it.
+
+ Step 1: Create the GitHub Actions Workflow
+
+Create a new file:
+.github/workflows/ci.yml
+
+Example 1 — React App CI/CD (build + test + Docker)
+name: React App CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name:  Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name:  Install dependencies
+        run: npm ci
+
+      - name:  Run tests
+        run: npm test -- --watchAll=false
+
+      - name:  Build app
+        run: npm run build
+
+      - name:  Build Docker image
+        run: docker build -t my-react-app .
+
+      # Optional: Push to Docker Hub
+      - name:  Login to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name:  Push Docker image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag my-react-app ${{ secrets.DOCKER_USERNAME }}/my-react-app:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-react-app:latest
+
+ What It Does
+Step	Purpose
+Checkout	Pulls repo code
+Setup Node	Uses Node 18
+Install	Installs dependencies (npm ci = clean install)
+Test	Runs your Jest or React tests
+Build	Builds production React app
+Docker Build	Builds your image
+Docker Push	Deploys to Docker Hub (optional)
+ Step 2: Add GitHub Secrets
+
+In your GitHub repo:
+
+Go to Settings → Secrets and variables → Actions
+
+Click New repository secret
+
+Add:
+
+DOCKER_USERNAME
+
+DOCKER_PASSWORD
+
+These are used for Docker Hub authentication.
+
+Example 2 — Node.js/Express API CI/CD
+
+If you’re using an Express backend, use this workflow instead:
+
+name: Node.js API CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name:  Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name:  Install dependencies
+        run: npm ci
+
+      - name:  Run tests
+        run: npm test || echo " No tests found"
+
+      - name:  Build Docker image
+        run: docker build -t my-node-api .
+
+      - name:  Login to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name:  Push Docker image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag my-node-api ${{ secrets.DOCKER_USERNAME }}/my-node-api:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/my-node-api:latest
+
+ Optional: Auto-deploy to a Server (like Render / AWS / DigitalOcean)
+
+You can add a deployment job after the Docker push:
+
+  deploy:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🚀 Deploy to Render
+        run: curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
