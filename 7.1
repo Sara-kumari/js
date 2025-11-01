@@ -1,0 +1,56 @@
+//------------------index.js
+const express = require("express");
+const cors = require("cors");
+
+const app = express();
+app.use(cors()); // Allow requests from React frontend
+
+// Example API endpoint
+app.get("/api/accounts", (req, res) => {
+  const data = [
+    { id: 1, name: "Sara", balance: 5000 },
+    { id: 2, name: "John", balance: 7200 },
+  ];
+  res.json(data);
+});
+
+const PORT = 5000;
+app.listen(PORT, () => console.log(` Server running on port ${PORT}`));
+
+//---------------------------------------App.js
+import React, { useEffect, useState } from "react";
+import axios from "axios";
+
+function App() {
+  const [accounts, setAccounts] = useState([]);
+
+  useEffect(() => {
+    // Fetch data from Express API
+    axios.get("http://localhost:5000/api/accounts")
+      .then(response => {
+        setAccounts(response.data);
+      })
+      .catch(error => {
+        console.error("Error fetching data:", error);
+      });
+  }, []);
+
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>🏦 Bank Accounts</h2>
+      {accounts.length === 0 ? (
+        <p>Loading...</p>
+      ) : (
+        <ul>
+          {accounts.map(acc => (
+            <li key={acc.id}>
+              <strong>{acc.name}</strong>: ₹{acc.balance}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export default App;
