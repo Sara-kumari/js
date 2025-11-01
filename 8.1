@@ -1,0 +1,206 @@
+Step 1: Backend (Node.js + Express + JWT)
+
+In a folder auth-server:
+
+npm init -y
+npm install express cors jsonwebtoken body-parser
+
+index.js
+const express = require("express");
+const jwt = require("jsonwebtoken");
+const bodyParser = require("body-parser");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+const SECRET_KEY = "mysecretkey";
+
+// Dummy user data
+const user = { username: "sara", password: "12345" };
+
+// ===== Login Route =====
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+
+  if (username === user.username && password === user.password) {
+    const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: "1h" });
+    res.json({ token });
+  } else {
+    res.status(401).json({ message: "Invalid credentials" });
+  }
+});
+
+// ===== Protected Route =====
+app.get("/profile", (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: "Missing token" });
+
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, SECRET_KEY, (err, decoded) => {
+    if (err) return res.status(403).json({ message: "Invalid token" });
+    res.json({ message: `Welcome ${decoded.username}!`, data: decoded });
+  });
+});
+
+app.listen(5000, () => console.log("Auth server running on port 5000"));
+
+
+Run it:
+
+node index.js
+
+
+Backend running at http://localhost:5000.
+
+ Step 2: Frontend (React)
+
+In a new folder auth-client:
+
+npx create-react-app auth-client
+cd auth-client
+npm install axios react-router-dom
+
+ Folder structure
+src/
+ ┣ components/
+ ┃ ┣ Login.js
+ ┃ ┗ Profile.js
+ ┣ App.js
+ ┣ ProtectedRoute.js
+ ┗ index.js
+
+🧩 src/App.js
+import React, { useState } from "react";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Login from "./components/Login";
+import Profile from "./components/Profile";
+import ProtectedRoute from "./ProtectedRoute";
+
+function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    !!localStorage.getItem("token")
+  );
+
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<Login setIsAuthenticated={setIsAuthenticated} />} />
+        <Route
+          path="/profile"
+          element={<ProtectedRoute isAuthenticated={isAuthenticated}>
+            <Profile />
+          </ProtectedRoute>}
+        />
+      </Routes>
+    </Router>
+  );
+}
+
+export default App;
+
+src/ProtectedRoute.js
+import React from "react";
+import { Navigate } from "react-router-dom";
+
+const ProtectedRoute = ({ isAuthenticated, children }) => {
+  return isAuthenticated ? children : <Navigate to="/" replace />;
+};
+
+export default ProtectedRoute;
+
+ src/components/Login.js
+import React, { useState } from "react";
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+
+function Login({ setIsAuthenticated }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const navigate = useNavigate();
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await axios.post("http://localhost:5000/login", { username, password });
+      localStorage.setItem("token", res.data.token);
+      setIsAuthenticated(true);
+      navigate("/profile");
+    } catch (err) {
+      setError("Invalid username or password");
+    }
+  };
+
+  return (
+    <div style={{ textAlign: "center", marginTop: "100px" }}>
+      <h2> Login</h2>
+      <form onSubmit={handleLogin}>
+        <input
+          type="text"
+          placeholder="Username"
+          onChange={(e) => setUsername(e.target.value)}
+          value={username}
+          required
+          style={{ margin: "5px", padding: "10px" }}
+        />
+        <br />
+        <input
+          type="password"
+          placeholder="Password"
+          onChange={(e) => setPassword(e.target.value)}
+          value={password}
+          required
+          style={{ margin: "5px", padding: "10px" }}
+        />
+        <br />
+        <button type="submit" style={{ padding: "10px 20px", marginTop: "10px" }}>
+          Login
+        </button>
+      </form>
+      {error && <p style={{ color: "red" }}>{error}</p>}
+    </div>
+  );
+}
+
+export default Login;
+
+ src/components/Profile.js
+import React, { useEffect, useState } from "react";
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+
+function Profile() {
+  const [data, setData] = useState("");
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    axios.get("http://localhost:5000/profile", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    .then((res) => setData(res.data.message))
+    .catch(() => {
+      localStorage.removeItem("token");
+      navigate("/");
+    });
+  }, [navigate]);
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    navigate("/");
+  };
+
+  return (
+    <div style={{ textAlign: "center", marginTop: "100px" }}>
+      <h2> Profile Page</h2>
+      <p>{data}</p>
+      <button onClick={handleLogout} style={{ padding: "10px 20px", marginTop: "20px" }}>
+        Logout
+      </button>
+    </div>
+  );
+}
+
+export default Profile;
