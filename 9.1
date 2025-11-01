@@ -1,0 +1,95 @@
+Folder structure
+
+Assume your React app looks like this:
+
+my-react-app/
+├── Dockerfile
+├── package.json
+├── package-lock.json
+├── public/
+└── src/
+
+ Step 1: Create Dockerfile
+
+Here’s the multi-stage Dockerfile:
+
+# ---------- Stage 1: Build the React app ----------
+FROM node:18 AS build
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files first (for better caching)
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy the rest of the app
+COPY . .
+
+# Build the React app for production
+RUN npm run build
+
+
+# ---------- Stage 2: Serve with Nginx ----------
+FROM nginx:1.25-alpine
+
+# Copy the build output from the previous stage
+COPY --from=build /app/build /usr/share/nginx/html
+
+# Expose port 80
+EXPOSE 80
+
+# Start Nginx server
+CMD ["nginx", "-g", "daemon off;"]
+
+ What’s Happening
+Stage	Purpose	Image
+Stage 1: build	Uses Node to compile React app (npm run build)	node:18
+Stage 2: production	Copies built static files into Nginx	nginx:alpine
+
+This keeps the final image small and secure, since Node is only used at build-time.
+
+⚙️ Step 2: Build the Docker Image
+
+From your project root, run:
+
+docker build -t react-app .
+
+
+You’ll see two stages — build and copy — in the logs.
+
+ Step 3: Run the Container
+docker run -p 3000:80 react-app
+
+
+Now visit  http://localhost:3000
+
+Your React app is live, served via Nginx 
+
+ Optional: Add .dockerignore
+
+To make builds faster, create a .dockerignore file:
+
+node_modules
+build
+.git
+Dockerfile
+.dockerignore
+
+ (Optional) Step 4: Use docker-compose.yml
+
+If you want to run multiple services (say, React + API), use Compose:
+
+version: '3.8'
+services:
+  frontend:
+    build: .
+    ports:
+      - "3000:80"
+
+
+Then run:
+
+docker-compose up --build
