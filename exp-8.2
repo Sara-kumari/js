@@ -1,0 +1,283 @@
+Step 1: Backend with Roles
+
+Update your backend (index.js) to include role logic.
+
+const express = require("express");
+const jwt = require("jsonwebtoken");
+const bodyParser = require("body-parser");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+const SECRET_KEY = "mysecretkey";
+
+// Dummy users database
+const users = [
+  { username: "admin", password: "12345", role: "Admin" },
+  { username: "sara", password: "12345", role: "User" },
+  { username: "mod", password: "12345", role: "Moderator" },
+];
+
+// ===== LOGIN =====
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+  const foundUser = users.find(
+    (u) => u.username === username && u.password === password
+  );
+
+  if (!foundUser) return res.status(401).json({ message: "Invalid credentials" });
+
+  const token = jwt.sign(
+    { username: foundUser.username, role: foundUser.role },
+    SECRET_KEY,
+    { expiresIn: "1h" }
+  );
+
+  res.json({ token, role: foundUser.role });
+});
+
+// ===== Middleware to verify token =====
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: "Missing token" });
+
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) return res.status(403).json({ message: "Invalid token" });
+    req.user = user;
+    next();
+  });
+}
+
+// ===== Role-based middleware =====
+function authorizeRoles(...allowedRoles) {
+  return (req, res, next) => {
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    next();
+  };
+}
+
+// ===== Protected Routes =====
+app.get("/profile", authenticateToken, (req, res) => {
+  res.json({ message: `Welcome ${req.user.username} (${req.user.role})` });
+});
+
+app.get(
+  "/admin",
+  authenticateToken,
+  authorizeRoles("Admin"),
+  (req, res) => {
+    res.json({ message: "Welcome Admin! You have full control." });
+  }
+);
+
+app.get(
+  "/moderator",
+  authenticateToken,
+  authorizeRoles("Admin", "Moderator"),
+  (req, res) => {
+    res.json({ message: "Moderator panel: You can manage content." });
+  }
+);
+
+app.listen(5000, () => console.log(" Server running with roles on port 5000"));
+
+Step 2: Frontend Role-Based Routing
+
+We’ll modify the React app to store the user’s role and restrict access based on it.
+
+ src/App.js
+import React, { useState } from "react";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Login from "./components/Login";
+import Profile from "./components/Profile";
+import AdminPanel from "./components/AdminPanel";
+import ModeratorPanel from "./components/ModeratorPanel";
+import ProtectedRoute from "./ProtectedRoute";
+
+function App() {
+  const [auth, setAuth] = useState({
+    token: localStorage.getItem("token"),
+    role: localStorage.getItem("role"),
+  });
+
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<Login setAuth={setAuth} />} />
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute auth={auth}>
+              <Profile />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute auth={auth} roles={["Admin"]}>
+              <AdminPanel />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/moderator"
+          element={
+            <ProtectedRoute auth={auth} roles={["Admin", "Moderator"]}>
+              <ModeratorPanel />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </Router>
+  );
+}
+
+export default App;
+
+ src/ProtectedRoute.js
+import React from "react";
+import { Navigate } from "react-router-dom";
+
+const ProtectedRoute = ({ auth, roles, children }) => {
+  const { token, role } = auth;
+
+  if (!token) return <Navigate to="/" replace />;
+
+  if (roles && !roles.includes(role)) {
+    alert("Access denied: insufficient permissions");
+    return <Navigate to="/profile" replace />;
+  }
+
+  return children;
+};
+
+export default ProtectedRoute;
+
+ src/components/Login.js
+import React, { useState } from "react";
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+
+function Login({ setAuth }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const navigate = useNavigate();
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await axios.post("http://localhost:5000/login", { username, password });
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem("role", res.data.role);
+      setAuth({ token: res.data.token, role: res.data.role });
+
+      navigate("/profile");
+    } catch {
+      setError("Invalid username or password");
+    }
+  };
+
+  return (
+    <div style={{ textAlign: "center", marginTop: "100px" }}>
+      <h2> Login</h2>
+      <form onSubmit={handleLogin}>
+        <input
+          type="text"
+          placeholder="Username"
+          onChange={(e) => setUsername(e.target.value)}
+          value={username}
+          required
+        />
+        <br />
+        <input
+          type="password"
+          placeholder="Password"
+          onChange={(e) => setPassword(e.target.value)}
+          value={password}
+          required
+        />
+        <br />
+        <button type="submit" style={{ marginTop: "10px" }}>
+          Login
+        </button>
+      </form>
+      {error && <p style={{ color: "red" }}>{error}</p>}
+    </div>
+  );
+}
+
+export default Login;
+
+ src/components/Profile.js
+import React from "react";
+import { useNavigate } from "react-router-dom";
+
+function Profile() {
+  const navigate = useNavigate();
+  const role = localStorage.getItem("role");
+
+  const handleLogout = () => {
+    localStorage.clear();
+    navigate("/");
+  };
+
+  return (
+    <div style={{ textAlign: "center", marginTop: "100px" }}>
+      <h2> Profile Page</h2>
+      <p>Current Role: {role}</p>
+
+      <div style={{ marginTop: "20px" }}>
+        {role === "Admin" && (
+          <button onClick={() => navigate("/admin")}>Go to Admin Panel</button>
+        )}
+        {(role === "Admin" || role === "Moderator") && (
+          <button onClick={() => navigate("/moderator")} style={{ marginLeft: "10px" }}>
+            Go to Moderator Panel
+          </button>
+        )}
+      </div>
+
+      <br />
+      <button onClick={handleLogout} style={{ marginTop: "20px" }}>
+        Logout
+      </button>
+    </div>
+  );
+}
+
+export default Profile;
+
+ src/components/AdminPanel.js
+import React from "react";
+
+function AdminPanel() {
+  return (
+    <div style={{ textAlign: "center", marginTop: "100px" }}>
+      <h2>🛠 Admin Panel</h2>
+      <p>You can manage users, roles, and settings.</p>
+    </div>
+  );
+}
+
+export default AdminPanel;
+
+ src/components/ModeratorPanel.js
+import React from "react";
+
+function ModeratorPanel() {
+  return (
+    <div style={{ textAlign: "center", marginTop: "100px" }}>
+      <h2>🗂 Moderator Panel</h2>
+      <p>You can review and moderate content.</p>
+    </div>
+  );
+}
+
+export default ModeratorPanel;
